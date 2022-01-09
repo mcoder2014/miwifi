@@ -182,6 +182,9 @@ cython_debug/
 # *.iml
 # *.ipr
 
+# config file
+config.ini
+
 # CMake
 cmake-build-*/
 

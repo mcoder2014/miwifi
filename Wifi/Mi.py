@@ -1,12 +1,13 @@
 #!/usr/bin/python3
 import time
-import configparser
 import requests
 from requests.adapters import HTTPAdapter
 import random
 from Crypto.Hash import SHA
 import json
 import re
+
+from . import config, util, base, exception
 
 
 class Mi:
@@ -15,33 +16,34 @@ class Mi:
     """
 
     def __init__(self, filepath):
+        # 配置文件位置
         self.filepath = filepath
         self.hasLogin = False
         self.LoginTime = int(time.time_ns() / 1000)
         self.token = ""
         # 读取配置
-        config = configparser.ConfigParser()
-        config.read('config.ini')
-        self.password = config.get('config', 'PASSWORD')
-        self.route_ip = config.get('config', 'ROUTE_IP')
-        self.max_retries = config.getint('config', 'MAX_RETRIES')
-        self.Timeout = config.getint('config', 'TIMEOUT')
-        self.ReqTimeout = config.getint('config', 'REQ_TIMEOUT')
-
-    def getTimestamp(self):
-        return int(time.time_ns() / 1000)
+        conf = config.Config()
+        conf.Load(self.filepath)
+        # 加载配置文件
+        self.password = conf.password
+        self.route_ip = conf.route_ip
+        self.max_retries = conf.max_retries
+        self.timeout = conf.timeout
+        self.reqTimeout = conf.reqTimeout
 
     def checkLogin(self):
-        if not self.hasLogin or self.getTimestamp() - self.LoginTime > self.Timeout:
+        if not self.hasLogin or util.getTimestamp() - self.LoginTime > self.timeout:
             self.Login()
 
     def Login(self):
         token = self.getToken()
         if len(token) != 0:
             self.token = token
-            self.LoginTime = self.getTimestamp()
+            self.LoginTime = util.getTimestamp()
             self.hasLogin = True
             print("Login success! token=", token)
+        else:
+            raise exception.ReqError("Login failed!")
 
     def List(self):
         """
@@ -51,15 +53,15 @@ class Mi:
         self.checkLogin()
         s = self.getSession()
         url = self.getUrl('/api/misystem/devicelist')
-        resp = s.get(url, timeout=self.ReqTimeout)
+        resp = s.get(url, timeout=self.reqTimeout)
         devices = json.loads(resp.content)
         return devices
 
     def GetNetThrough(self):
         self.checkLogin()
-        s=self.getSession()
-        url=self.getUrl('/api/xqnetwork/portforward?ftype=1')
-        resp=s.get(url, timeout=self.ReqTimeout)
+        s = self.getSession()
+        url = self.getUrl('/api/xqnetwork/portforward?ftype=1')
+        resp = s.get(url, timeout=self.reqTimeout)
         config = json.loads(resp.content)
         return config
 
@@ -78,7 +80,7 @@ class Mi:
         route_url = 'http://' + self.route_ip
 
         # 获取nonce和mac_addr
-        req = s.get(route_url + '/cgi-bin/luci/web', timeout=self.ReqTimeout)
+        req = s.get(route_url + '/cgi-bin/luci/web', timeout=self.reqTimeout)
         key = re.findall(r'key: \'(.*)\',', req.text)[0]
         mac_addr = re.findall(r'deviceId = \'(.*)\';', req.text)[0]
         nonce = "0_" + mac_addr + "_" + str(int(time.time())) + "_" + str(random.randint(1000, 10000))
@@ -98,7 +100,7 @@ class Mi:
         }
 
         url = route_url + '/cgi-bin/luci/api/xqsystem/login'
-        response = s.post(url=url, data=data, timeout=self.ReqTimeout)
+        response = s.post(url=url, data=data, timeout=self.reqTimeout)
         res = json.loads(response.content)
         if res['code'] == 0:
             token = res['token']
@@ -124,7 +126,7 @@ class Mi:
         self.checkLogin()
         s = self.getSession()
         url = self.getUrl('/api/misystem/status')
-        req = s.get(url, timeout=self.ReqTimeout)
+        req = s.get(url, timeout=self.reqTimeout)
         route_status = json.loads(req.content)
         mem_usage = route_status["mem"]["usage"]
         uptime = round(float(route_status["upTime"]) / 60.0 / 60.0 / 24.0, 2)
@@ -149,3 +151,47 @@ class Mi:
             "count": count
         }
         return status
+
+    def GetPortForward(self, ftype=1):
+        self.checkLogin()
+        s = self.getSession()
+        url = self.getUrl('/api/xqnetwork/portforward?ftype=' + str(ftype))
+        req = s.get(url, timeout=self.reqTimeout)
+        conf = json.loads(req.content)
+        return conf
+
+    def AddPortForward(self, conf=base.PortForwardType()):
+        self.checkLogin()
+        s = self.getSession()
+        url = self.getUrl('/api/xqnetwork/add_redirect')
+        resp = s.post(url, data={
+            "name": conf.name,
+            "proto": 1,
+            "sport": conf.destport,
+            "ip": conf.destip,
+            "dport": conf.srcport
+        })
+        if resp.status_code != 200:
+            raise exception.ReqError("eee")
+
+    def AddRangePortForward(self, conf=base.PortForwardType()):
+        self.checkLogin()
+        s = self.getSession()
+        url = self.getUrl('/api/xqnetwork/add_range_redirect')
+        resp = s.post(url, data={
+            "name": conf.name,
+            "proto": 1,
+            "ip": conf.destip,
+            "fport": conf.destport["f"],
+            "tport": conf.destport["t"]
+        })
+        if resp.status_code != 200:
+            raise exception.ReqError("eee")
+
+    def ApplyPortForward(self):
+        self.checkLogin()
+        s = self.getSession()
+        url = self.getUrl('/api/xqnetwork/redirect_apply')
+        resp = s.get(url, timeout=self.reqTimeout)
+        if resp.status_code != 200:
+            raise exception.ReqError("eee")
